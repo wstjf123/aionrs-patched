@@ -1,0 +1,65 @@
+name: Build Windows x64
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-aioncore-windows:
+    name: Build aioncore.exe (Windows x64, patched aion-compact)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout aionrs-patched (this repo)
+        uses: actions/checkout@v4
+        with:
+          path: aionrs-patched
+
+      - name: Checkout AionCore
+        uses: actions/checkout@v4
+        with:
+          repository: iOfficeAI/AionCore
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: AionCore
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            AionCore/target
+          key: aioncore-win-x64-${{ hashFiles('AionCore/Cargo.lock') }}-${{ hashFiles('aionrs-patched/crates/aion-compact/src/sanitize.rs') }}
+          restore-keys: |
+            aioncore-win-x64-
+
+      - name: Patch AionCore Cargo.toml to use local aion-compact
+        shell: pwsh
+        run: |
+          $patch = @"
+
+          [patch."https://github.com/iOfficeAI/aionrs.git"]
+          aion-compact = { path = "../aionrs-patched/crates/aion-compact" }
+          "@
+          Add-Content -Path "AionCore/Cargo.toml" -Value $patch
+          Write-Host "Applied [patch] to AionCore/Cargo.toml"
+
+      - name: Build aioncore.exe
+        working-directory: AionCore
+        run: cargo build --release --target x86_64-pc-windows-msvc -p aionui-app
+
+      - name: Upload aioncore.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: aioncore-windows-x64-patched
+          path: AionCore/target/x86_64-pc-windows-msvc/release/aioncore.exe
+          retention-days: 30
