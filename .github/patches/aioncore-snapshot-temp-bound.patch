@@ -1,0 +1,152 @@
+diff --git a/crates/aionui-app/src/router/state.rs b/crates/aionui-app/src/router/state.rs
+index 644a3c36..b31e7bb4 100644
+--- a/crates/aionui-app/src/router/state.rs
++++ b/crates/aionui-app/src/router/state.rs
+@@ -387,6 +387,7 @@ pub fn build_file_state(services: &AppServices) -> Result<FileRouterState, Route
+     let browse_roots = BrowseRoots::new();
+     let file_service = Arc::new(FileService::new(broadcaster.clone(), allowed_roots.clone()));
+     let watch_service = Arc::new(FileWatchService::new(broadcaster).map_err(file_watch_init_error)?);
++    SnapshotService::cleanup_stale_snapshots();
+     let snapshot_service = Arc::new(SnapshotService::new());
+     Ok(FileRouterState {
+         file_service,
+diff --git a/crates/aionui-file/src/snapshot_service/helpers.rs b/crates/aionui-file/src/snapshot_service/helpers.rs
+index 81e31ae3..8bf90fe4 100644
+--- a/crates/aionui-file/src/snapshot_service/helpers.rs
++++ b/crates/aionui-file/src/snapshot_service/helpers.rs
+@@ -11,6 +11,7 @@ use aionui_common::FileChangeOperation;
+ 
+ use crate::error::FileError;
+ use git2::{IndexAddOption, Repository, Signature, Status, StatusOptions};
++use ignore::WalkBuilder;
+ 
+ use crate::types::{CompareResult, FileChangeInfo, SnapshotInfo, SnapshotMode};
+ 
+@@ -40,6 +41,16 @@ Thumbs.db
+ .output/
+ ";
+ 
++/// Maximum individual file size included in a non-git snapshot baseline.
++///
++/// Snapshot mode creates a temporary Git repo in the OS temp directory. Large
++/// binary/build artifacts can otherwise fill the system drive during baseline
++/// creation.
++pub(super) const SNAPSHOT_MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
++
++/// Maximum total file payload included in a non-git snapshot baseline.
++pub(super) const SNAPSHOT_MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
++
+ /// Signature name used for snapshot commits.
+ const SNAPSHOT_SIG_NAME: &str = "aionui";
+ /// Signature email used for snapshot commits.
+@@ -131,17 +142,29 @@ pub(super) fn init_snapshot_repo(workspace: &Path, temp_dir: &Path) -> Result<()
+     std::fs::write(info_dir.join("exclude"), SNAPSHOT_EXCLUDE_RULES)
+         .map_err(|e| FileError::Internal(format!("Failed to write exclude rules: {}", e)))?;
+ 
+-    // Stage all workspace files
++    // Stage a bounded baseline. Do not use add_all here: for a plain
++    // directory it can duplicate very large workspaces into the OS temp dir.
++    let baseline = collect_snapshot_baseline_paths(workspace)?;
+     let mut index = repo
+         .index()
+         .map_err(|e| FileError::Internal(format!("Failed to get index: {}", e)))?;
+-    index
+-        .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+-        .map_err(|e| FileError::Internal(format!("Failed to add files to index: {}", e)))?;
++    for path in &baseline.paths {
++        index.add_path(path).map_err(|e| {
++            FileError::Internal(format!(
++                "Failed to add file {} to snapshot index: {}",
++                path.display(),
++                e
++            ))
++        })?;
++    }
+     index
+         .write()
+         .map_err(|e| FileError::Internal(format!("Failed to write index: {}", e)))?;
+ 
++    if !baseline.skipped.is_empty() {
++        append_snapshot_excludes(&info_dir.join("exclude"), &baseline.skipped)?;
++    }
++
+     // Create initial commit
+     let tree_oid = index
+         .write_tree()
+@@ -157,6 +180,76 @@ pub(super) fn init_snapshot_repo(workspace: &Path, temp_dir: &Path) -> Result<()
+     Ok(())
+ }
+ 
++#[derive(Debug, Default)]
++pub(super) struct SnapshotBaselinePaths {
++    pub paths: Vec<PathBuf>,
++    pub skipped: Vec<PathBuf>,
++}
++
++pub(super) fn collect_snapshot_baseline_paths(workspace: &Path) -> Result<SnapshotBaselinePaths, FileError> {
++    let mut result = SnapshotBaselinePaths::default();
++    let mut total_bytes = 0_u64;
++    let walker = WalkBuilder::new(workspace)
++        .hidden(false)
++        .git_ignore(true)
++        .git_global(true)
++        .git_exclude(true)
++        .filter_entry(|entry| {
++            let name = entry.file_name().to_string_lossy();
++            !matches!(
++                name.as_ref(),
++                "node_modules" | "dist" | "build" | "target" | ".venv" | "__pycache__" | ".next" | ".nuxt" | ".output"
++            )
++        })
++        .build();
++
++    for entry in walker {
++        let entry = entry.map_err(|e| FileError::Internal(format!("Failed to walk snapshot workspace: {}", e)))?;
++        let path = entry.path();
++        if path == workspace || !entry.file_type().is_some_and(|file_type| file_type.is_file()) {
++            continue;
++        }
++
++        let rel = path
++            .strip_prefix(workspace)
++            .map_err(|e| FileError::Internal(format!("Failed to relativize snapshot path {}: {}", path.display(), e)))?
++            .to_path_buf();
++        let metadata = entry
++            .metadata()
++            .map_err(|e| FileError::Internal(format!("Failed to stat snapshot file {}: {}", path.display(), e)))?;
++        let len = metadata.len();
++
++        if len > SNAPSHOT_MAX_FILE_BYTES || total_bytes.saturating_add(len) > SNAPSHOT_MAX_TOTAL_BYTES {
++            result.skipped.push(rel);
++            continue;
++        }
++
++        total_bytes += len;
++        result.paths.push(rel);
++    }
++
++    Ok(result)
++}
++
++fn append_snapshot_excludes(exclude_path: &Path, skipped: &[PathBuf]) -> Result<(), FileError> {
++    let mut content = std::fs::read_to_string(exclude_path)
++        .map_err(|e| FileError::Internal(format!("Failed to read snapshot exclude file: {}", e)))?;
++    content.push_str("\n# Skipped by AionUi snapshot size limits\n");
++    for path in skipped {
++        content.push_str(&git_exclude_path(path));
++        content.push('\n');
++    }
++    std::fs::write(exclude_path, content)
++        .map_err(|e| FileError::Internal(format!("Failed to append snapshot exclude rules: {}", e)))
++}
++
++fn git_exclude_path(path: &Path) -> String {
++    path.components()
++        .map(|component| component.as_os_str().to_string_lossy())
++        .collect::<Vec<_>>()
++        .join("/")
++}
++
+ /// Get the current branch name from a repository.
+ /// Returns `None` if HEAD is detached or the repo has no commits.
+ pub(super) fn current_branch(repo: &Repository) -> Option<String> {

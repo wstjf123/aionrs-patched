@@ -5,8 +5,13 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
+  AIONCORE_RELEASE_TAG: v0.1.27-patched
+  AIONCORE_ARCHIVE: aioncore-v0.1.27-patched-x86_64-pc-windows-msvc.zip
 
 jobs:
   build-aioncore-windows:
@@ -38,9 +43,16 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             AionCore/target
-          key: aioncore-win-x64-${{ hashFiles('AionCore/Cargo.lock') }}-${{ hashFiles('aionrs-patched/crates/aion-compact/src/sanitize.rs') }}
+          key: aioncore-win-x64-${{ hashFiles('AionCore/Cargo.lock') }}-${{ hashFiles('aionrs-patched/crates/aion-compact/src/sanitize.rs') }}-${{ hashFiles('aionrs-patched/.github/patches/aioncore-snapshot-temp-bound.patch') }}
           restore-keys: |
             aioncore-win-x64-
+
+      - name: Apply AionCore snapshot temp bound patch
+        shell: pwsh
+        run: |
+          git -C AionCore apply --check ../aionrs-patched/.github/patches/aioncore-snapshot-temp-bound.patch
+          git -C AionCore apply ../aionrs-patched/.github/patches/aioncore-snapshot-temp-bound.patch
+          Write-Host "Applied AionCore snapshot temp bound patch"
 
       - name: Patch AionCore Cargo.toml to use local aion-compact
         shell: pwsh
@@ -57,9 +69,26 @@ jobs:
         working-directory: AionCore
         run: cargo build --release --target x86_64-pc-windows-msvc -p aionui-app
 
-      - name: Upload aioncore.exe
+      - name: Package aioncore.exe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "AionCore/target/x86_64-pc-windows-msvc/release/aioncore.exe" -DestinationPath "dist/${env:AIONCORE_ARCHIVE}" -Force
+          Copy-Item "AionCore/target/x86_64-pc-windows-msvc/release/aioncore.exe" "dist/aioncore.exe" -Force
+
+      - name: Upload aioncore artifacts
         uses: actions/upload-artifact@v4
         with:
           name: aioncore-windows-x64-patched
-          path: AionCore/target/x86_64-pc-windows-msvc/release/aioncore.exe
+          path: |
+            dist/${{ env.AIONCORE_ARCHIVE }}
+            dist/aioncore.exe
           retention-days: 30
+
+      - name: Upload GitHub Release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${env:AIONCORE_RELEASE_TAG}" "dist/${env:AIONCORE_ARCHIVE}" "dist/aioncore.exe" --repo "${env:GITHUB_REPOSITORY}" --clobber
+          Write-Host "Uploaded assets to release ${env:AIONCORE_RELEASE_TAG}"
