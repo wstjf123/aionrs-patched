@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.28](https://github.com/wstjf123/aionrs-patched/compare/v0.1.27...v0.1.28) (2026-06-25)
+
+
+### Bug Fixes
+
+* **ci:** repair compact patch artifact ([1106078](https://github.com/wstjf123/aionrs-patched/commit/110607847f9df4733092b3657239ac2c41a29c00))
+* **compact:** handle Windows CRLF in collapse_cr_lines (from aionrs v0.1.27) ([fe7563f](https://github.com/wstjf123/aionrs-patched/commit/fe7563f2ad3a9cf5b75ed4753ac36359f0d8ffd2))
+* **compact:** prevent no-tools prompt leakage ([c730108](https://github.com/wstjf123/aionrs-patched/commit/c730108f98164e9a9e74027ffbf439cf348a9245))
+* **workflow:** lower snapshot file limit ([5b5dbb4](https://github.com/wstjf123/aionrs-patched/commit/5b5dbb4fe7066e99e8cbe98b86e13eb4dd252d63))
+* **workflow:** patch aioncore snapshot temp usage ([a69ae33](https://github.com/wstjf123/aionrs-patched/commit/a69ae338249345d85261d3df8cb5dcd8d15c6045))
+
 ## [0.1.27](https://github.com/iOfficeAI/aionrs/compare/v0.1.26...v0.1.27) (2026-05-26)
 
 
