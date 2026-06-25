@@ -1,0 +1,15 @@
+diff --git a/crates/aion-compact/src/sanitize.rs b/crates/aion-compact/src/sanitize.rs
+index 9c615c1..e54c05e 100644
+--- a/crates/aion-compact/src/sanitize.rs
++++ b/crates/aion-compact/src/sanitize.rs
+@@ -14,6 +14,10 @@ pub fn collapse_cr_lines(text: &str) -> String {
+         if !result.is_empty() {
+             result.push('\n');
+         }
++        // Strip trailing CR first (Windows CRLF: "hello\r\n" splits to "hello\r").
++        // Without this, rsplit('\r').next() returns the empty string after the
++        // trailing CR, discarding the entire line content.
++        let line = line.trim_end_matches('\r');
+         if let Some(last) = line.rsplit('\r').next() {
+             result.push_str(last);
+         }

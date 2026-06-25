@@ -20,7 +20,14 @@ jobs:
       - name: Checkout aionrs-patched (this repo)
         uses: actions/checkout@v4
         with:
-          path: aionrs-patched
+          path: aionrs-patches
+
+      - name: Checkout aionrs upstream
+        uses: actions/checkout@v4
+        with:
+          repository: iOfficeAI/aionrs
+          ref: v0.1.33
+          path: aionrs-upstream
 
       - name: Checkout AionCore
         uses: actions/checkout@v4
@@ -41,24 +48,42 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             AionCore/target
-          key: aioncore-win-x64-${{ hashFiles('AionCore/Cargo.lock') }}-${{ hashFiles('aionrs-patched/crates/aion-compact/src/sanitize.rs') }}-${{ hashFiles('aionrs-patched/.github/patches/aioncore-snapshot-temp-bound.patch') }}
+          key: aioncore-win-x64-${{ hashFiles('AionCore/Cargo.lock') }}-${{ hashFiles('aionrs-patches/.github/patches/aion-agent-compact-prompt.patch') }}-${{ hashFiles('aionrs-patches/.github/patches/aion-compact-crlf.patch') }}-${{ hashFiles('aionrs-patches/.github/patches/aioncore-snapshot-temp-bound.patch') }}
           restore-keys: |
             aioncore-win-x64-
 
       - name: Apply AionCore snapshot temp bound patch
         shell: pwsh
         run: |
-          git -C AionCore apply --check ../aionrs-patched/.github/patches/aioncore-snapshot-temp-bound.patch
-          git -C AionCore apply ../aionrs-patched/.github/patches/aioncore-snapshot-temp-bound.patch
+          git -C AionCore apply --check ../aionrs-patches/.github/patches/aioncore-snapshot-temp-bound.patch
+          git -C AionCore apply ../aionrs-patches/.github/patches/aioncore-snapshot-temp-bound.patch
           Write-Host "Applied AionCore snapshot temp bound patch"
 
-      - name: Patch AionCore Cargo.toml to use local aion-compact
+      - name: Apply aionrs patches
+        shell: pwsh
+        run: |
+          git -C aionrs-upstream apply --check ../aionrs-patches/.github/patches/aion-compact-crlf.patch
+          git -C aionrs-upstream apply ../aionrs-patches/.github/patches/aion-compact-crlf.patch
+          git -C aionrs-upstream apply --check ../aionrs-patches/.github/patches/aion-agent-compact-prompt.patch
+          git -C aionrs-upstream apply ../aionrs-patches/.github/patches/aion-agent-compact-prompt.patch
+          Write-Host "Applied aionrs upstream patches"
+
+      - name: Patch AionCore Cargo.toml to use local aionrs crates
         shell: pwsh
         run: |
           $patch = @"
 
           [patch."https://github.com/iOfficeAI/aionrs.git"]
-          aion-compact = { path = "../aionrs-patched/crates/aion-compact" }
+          aion-agent = { path = "../aionrs-upstream/crates/aion-agent" }
+          aion-compact = { path = "../aionrs-upstream/crates/aion-compact" }
+          aion-config = { path = "../aionrs-upstream/crates/aion-config" }
+          aion-mcp = { path = "../aionrs-upstream/crates/aion-mcp" }
+          aion-memory = { path = "../aionrs-upstream/crates/aion-memory" }
+          aion-protocol = { path = "../aionrs-upstream/crates/aion-protocol" }
+          aion-providers = { path = "../aionrs-upstream/crates/aion-providers" }
+          aion-skills = { path = "../aionrs-upstream/crates/aion-skills" }
+          aion-tools = { path = "../aionrs-upstream/crates/aion-tools" }
+          aion-types = { path = "../aionrs-upstream/crates/aion-types" }
           "@
           Add-Content -Path "AionCore/Cargo.toml" -Value $patch
           Write-Host "Applied [patch] to AionCore/Cargo.toml"

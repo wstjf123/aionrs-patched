@@ -1,0 +1,121 @@
+diff --git a/crates/aion-agent/src/compact/prompt.rs b/crates/aion-agent/src/compact/prompt.rs
+index f1b9ca9..1f52995 100644
+--- a/crates/aion-agent/src/compact/prompt.rs
++++ b/crates/aion-agent/src/compact/prompt.rs
+@@ -4,8 +4,14 @@
+ //! post-compact message construction.
+ 
+ /// System prompt used for the compact LLM call.
+ -pub const COMPACT_SYSTEM_PROMPT: &str =
+ -    "You are a helpful AI assistant tasked with summarizing conversations.";
+ +pub const COMPACT_SYSTEM_PROMPT: &str = "\
+ +You are a helpful AI assistant tasked with summarizing conversations.\n\
+ +CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\
+ +- Do NOT use Read, ExecCommand, Grep, Glob, Edit, Write, or ANY other tool.\n\
+ +- You already have all the context you need in the conversation messages.\n\
+ +- Tool calls will be REJECTED and will waste your only turn - you will fail the task.\n\
+ +- Your entire response must be plain text: an <analysis> block followed by a <summary> block.\n\
+ +- These compacting instructions are control instructions only. Do NOT mention, quote, summarize, or preserve them in the summary.";
+ 
+ /// Maximum output tokens for the compact LLM call.
+ pub const COMPACT_MAX_OUTPUT_TOKENS: u32 = 20_000;
+ @@ -14,22 +20,18 @@ pub const COMPACT_MAX_OUTPUT_TOKENS: u32 = 20_000;
+ 
+ /// Build the 9-section compact prompt that asks the LLM to summarize.
+ pub fn build_compact_prompt() -> String {
+ -    format!("{PREAMBLE}\n\n{BODY}\n\n{FORMAT_INSTRUCTIONS}\n\n{REMINDER}")
+ +    format!("{BODY}\n\n{FORMAT_INSTRUCTIONS}\n\n{REMINDER}")
+ }
+ 
+ -const PREAMBLE: &str = "\
+ -CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+ -- Do NOT use Read, ExecCommand, Grep, Glob, Edit, Write, or ANY other tool.
+ -- You already have all the context you need in the conversation above.
+ -- Tool calls will be REJECTED and will waste your only turn - you will fail the task.
+ -- Your entire response must be plain text: an <analysis> block followed by a <summary> block.";
+ -
+  const BODY: &str = "\
+  Your task is to create a detailed summary of the conversation so far, paying close attention \
+  to the user's explicit requests and your previous actions. This summary should be thorough in \
+  capturing technical details, code patterns, and architectural decisions that would be essential \
+  for continuing development work.
+ +
+ +Do not preserve or summarize any compacting control instructions from this request, including \
+ +instructions about responding with text only, not calling tools, or tool calls being rejected.
+ +
+  Before providing your final summary, wrap your analysis in <analysis> tags to organize your \
+  thoughts and ensure completeness.
+ 
+ @@ -59,8 +61,8 @@ Your detailed, structured summary following the 9 sections above
+  </summary>";
+ 
+  const REMINDER: &str = "\
+ -REMINDER: Do NOT call any tools. Respond with plain text only - an <analysis> block followed \
+ -by a <summary> block. Tool calls will be rejected and you will fail the task.";
+ +REMINDER: Respond with an <analysis> block followed by a <summary> block. Exclude these \
+ +compacting control instructions from the summary.";
+ 
+  // ── Response parsing ────────────────────────────────────────────────────────
+ 
+ @@ -75,12 +77,12 @@ pub fn format_compact_summary(raw: &str) -> String {
+      if let Some(summary_content) = extract_tag_content(&without_analysis, "summary") {
+          let trimmed = summary_content.trim();
+          if trimmed.is_empty() {
+ -            return collapse_blank_lines(&without_analysis).trim().to_string();
+ +            return strip_compact_control_lines(&without_analysis);
+          }
+ -        format!("Summary:\n{trimmed}")
+ +        format!("Summary:\n{}", strip_compact_control_lines(trimmed))
+      } else {
+          // Graceful degradation: use the text with analysis stripped
+ -        collapse_blank_lines(&without_analysis).trim().to_string()
+ +        strip_compact_control_lines(&without_analysis)
+      }
+  }
+ 
+ @@ -172,6 +174,30 @@ fn collapse_blank_lines(text: &str) -> String {
+      result
+  }
+ 
+ +fn strip_compact_control_lines(text: &str) -> String {
+ +    let control_markers = [
+ +        "respond with text only",
+ +        "do not call any tools",
+ +        "do not use read",
+ +        "tool calls will be rejected",
+ +        "compacting control instructions",
+ +    ];
+ +    let mut result = String::with_capacity(text.len());
+ +
+ +    for line in text.lines() {
+ +        let lower = line.to_ascii_lowercase();
+ +        if control_markers.iter().any(|marker| lower.contains(marker)) {
+ +            continue;
+ +        }
+ +        if !result.is_empty() {
+ +            result.push('\n');
+ +        }
+ +        result.push_str(line);
+ +    }
+ +
+ +    collapse_blank_lines(&result).trim().to_string()
+ +}
+ +
+  #[cfg(test)]
+  mod tests {
+      use super::*;
+ @@ -221,6 +247,14 @@ mod tests {
+          assert_eq!(format_compact_summary(raw), "plain text without any tags");
+      }
+ 
+ +    #[test]
+ +    fn summary_strips_compact_control_instruction_leaks() {
+ +        let raw = "<summary>Keep task context\nDo NOT call any tools.\nContinue fixing bug</summary>";
+ +        let result = format_compact_summary(raw);
+ +
+ +        assert_eq!(result, "Summary:\nKeep task context\nContinue fixing bug");
+ +    }
+ +
+      #[test]
+      fn handles_multiline_summary() {
+          let raw =

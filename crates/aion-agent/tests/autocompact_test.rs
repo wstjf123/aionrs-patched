@@ -15,7 +15,7 @@ use aion_agent::compact::auto::{
     CompactError, autocompact, extract_compact_metadata, is_compact_boundary, should_autocompact,
 };
 use aion_agent::compact::prompt::{
-    build_compact_prompt, build_summary_content, format_compact_summary,
+    COMPACT_SYSTEM_PROMPT, build_compact_prompt, build_summary_content, format_compact_summary,
 };
 use aion_agent::compact::state::CompactState;
 use aion_config::compact::CompactConfig;
@@ -193,7 +193,8 @@ fn tc_2_4_08_prompt_contains_all_sections() {
     for i in 1..=9 {
         assert!(prompt.contains(&format!("{i}.")), "Missing section {i}");
     }
-    assert!(prompt.contains("CRITICAL: Respond with TEXT ONLY"));
+    assert!(!prompt.contains("CRITICAL: Respond with TEXT ONLY"));
+    assert!(COMPACT_SYSTEM_PROMPT.contains("CRITICAL: Respond with TEXT ONLY"));
 }
 
 // ── TC-2.4-09: Summary formatting (normal) ──────────────────────────────────
@@ -290,7 +291,17 @@ fn tc_2_4_14_disabled_config_skips() {
 #[test]
 fn tc_2_4_15_prompt_forbids_tool_calls() {
     let prompt = build_compact_prompt();
-    assert!(prompt.contains("Do NOT call any tools"));
+    assert!(!prompt.contains("Do NOT call any tools"));
+    assert!(COMPACT_SYSTEM_PROMPT.contains("Do NOT call any tools"));
+}
+
+#[test]
+fn compact_prompt_control_instructions_stay_out_of_user_message() {
+    let prompt = build_compact_prompt();
+
+    assert!(!prompt.contains("Do NOT use Read"));
+    assert!(!prompt.contains("Tool calls will be REJECTED"));
+    assert!(prompt.contains("Do not preserve or summarize any compacting control instructions"));
 }
 
 // ── TC-2.4-16: Success resets failure counter ───────────────────────────────
